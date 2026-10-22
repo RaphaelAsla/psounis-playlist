@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ψούνης Playlists</title>
+<meta name="description" content="Όλες οι playlists του καναλιού Δ. Ψούνη, οργανωμένες όπως στο psounis.gr, με σημάδια προόδου.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232563eb'/><path d='M12 9l12 7-12 7z' fill='white'/></svg>">
+<link rel="stylesheet" href="style.css">
+<script>try{var t=localStorage.getItem("ps-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-row">
+    <a class="brand" href="#">Ψούνης <span>Playlists</span></a>
+    <div class="top-tools">
+      <input id="search" type="search" placeholder="Αναζήτηση… (π.χ. γράφοι, recursion)" autocomplete="off">
+      <button id="theme" class="icon-btn" title="Θέμα" aria-label="Αλλαγή θέματος">◐</button>
+    </div>
+  </div>
+  <nav class="wrap tabs" id="tabs"></nav>
+</header>
+
+<main class="wrap" id="main"></main>
+
+<footer class="wrap foot">
+  <p>Ανεπίσημη σελίδα από φοιτητές. Όλο το περιεχόμενο ανήκει στον
+    <a href="https://www.youtube.com/@psounis" target="_blank" rel="noopener">Δημήτρη Ψούνη</a>
+    (<a href="https://psounis.gr/" target="_blank" rel="noopener">psounis.gr</a>, σημειώσεις στο
+    <a href="https://github.com/psounis/notes" target="_blank" rel="noopener">github.com/psounis/notes</a>).
+    Η πρόοδός σας αποθηκεύεται μόνο στον browser σας.</p>
+  <p id="generated"></p>
+  <p class="io">
+    <button id="export" class="link-btn">Εξαγωγή προόδου</button> ·
+    <label class="link-btn">Εισαγωγή προόδου<input id="import" type="file" accept="application/json" hidden></label> ·
+    <button id="reset" class="link-btn">Μηδενισμός</button>
+  </p>
+</footer>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
