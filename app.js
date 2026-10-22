@@ -74,7 +74,8 @@
   // ---------------------------------------------------------------- views
   function viewHome() {
     const card = c => `<a class="card" href="#${c.slug}"><h3>${esc(c.code)}</h3>
-      <p>${c.sections.length ? `${c.sections.length} ενότητες · ` : ""}${extraFor(c.code).length} playlists εκτός psounis.gr</p>${progress(courseIds(c))}</a>`;
+      <p>${[c.sections.length && `${c.sections.length} ενότητες`, extraFor(c.code).length && `${extraFor(c.code).length} playlists εκτός πίνακα`,
+        c.source === "channel" && "μόνο στο κανάλι"].filter(Boolean).join(" · ")}</p>${progress(courseIds(c))}</a>`;
     const reviews = allItems().filter(x => status[x.id] === "r");
     main.innerHTML = `
       <h1>Οι playlists του Δ. Ψούνη για τα μαθήματα του ΕΑΠ</h1>
@@ -87,7 +88,7 @@
   }
 
   function viewCourse(c) {
-    const cols = 5, extra = extraFor(c.code);
+    const extra = extraFor(c.code), notes = c.sections.some(s => s.rows.some(r => r.pdf || r.pdf4)), cols = notes ? 5 : 4;
     let body = "";
     c.sections.forEach(s => {
       const rows = s.rows.filter(r => keep(rowIds(r)));
@@ -99,7 +100,7 @@
         const sub = (o, label) => o ? `<div class="cell"><span class="name">${esc(o.name)}</span>${pdf(o.pdf)}${pdf(o.sol, "Λύσεις")}${video(o, "Βίντεο")}</div>` : "";
         body += `<tr class="${rowClass(ids)}">
           <td class="lesson">${esc(r.lesson)}</td>
-          <td data-h="Σημειώσεις" class="${r.pdf || r.pdf4 ? "" : "empty-cell"}"><div class="cell">${pdf(r.pdf)}${pdf(r.pdf4, "4 σε 1")}</div></td>
+          ${notes ? `<td data-h="Σημειώσεις" class="${r.pdf || r.pdf4 ? "" : "empty-cell"}"><div class="cell">${pdf(r.pdf)}${pdf(r.pdf4, "4 σε 1")}</div></td>` : ""}
           <td data-h="Βίντεο" class="${r.video ? "" : "empty-cell"}"><div class="cell">${video(r, "Playlist")}</div></td>
           <td data-h="Τεστ" class="${r.test ? "" : "empty-cell"}">${sub(r.test)}</td>
           <td data-h="Κάρτες" class="${r.cards ? "" : "empty-cell"}">${sub(r.cards)}</td></tr>`;
@@ -113,12 +114,13 @@
     }
     main.innerHTML = `
       <h1>${esc(c.code)}</h1>
-      <p class="sub">Όπως στο <a href="https://psounis.gr/${c.slug}.html" target="_blank" rel="noopener">psounis.gr/${c.slug}</a>,
-        με δωρεάν PDF από το GitHub αντί για slideshare.${extra.length ? ` <a href="#${c.slug}" data-jump="extra">${extra.length} playlists με βίντεο εκτός πίνακα ↓</a>` : ""}</p>
+      <p class="sub">${c.source === "channel"
+        ? "Δεν υπάρχει σελίδα στο psounis.gr· ο πίνακας είναι φτιαγμένος από τις σειρές του καναλιού, με την ίδια μορφή. Κάθε κελί ανοίγει στο σημείο του μαθήματος μέσα στη σειρά."
+        : `Όπως στο <a href="https://psounis.gr/${c.slug}.html" target="_blank" rel="noopener">psounis.gr/${c.slug}</a>, με δωρεάν PDF από το GitHub αντί για slideshare.`}${extra.length ? ` <a href="#${c.slug}" data-jump="extra">${extra.length} playlists με βίντεο εκτός πίνακα ↓</a>` : ""}</p>
       ${c.all ? `<p class="sub">${whole(c.all, "πολλές ενότητες σε μία playlist")}</p>` : ""}
       ${filterBar(courseIds(c))}
       <div class="table-wrap"><table>
-        <thead><tr><th>Μάθημα</th><th>Σημειώσεις</th><th>Βίντεο</th><th>Τεστ</th><th>Κάρτες</th></tr></thead>
+        <thead><tr><th>Μάθημα</th>${notes ? "<th>Σημειώσεις</th>" : ""}<th>Βίντεο</th><th>Τεστ</th><th>Κάρτες</th></tr></thead>
         <tbody>${body || `<tr><td colspan="${cols}" class="empty">Τίποτα εδώ με αυτό το φίλτρο.</td></tr>`}</tbody>
       </table></div>
       ${extra.length ? `<h2 id="extra">Επιπλέον playlists ${esc(c.code)} στο κανάλι <span class="badge">βίντεο που δεν είναι στον πίνακα</span></h2>

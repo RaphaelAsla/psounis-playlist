@@ -12,7 +12,7 @@ Sources (all public):
 Usage:  python scripts/update.py [--reuse]   (needs: beautifulsoup4, yt-dlp on PATH;
                                              --reuse = use the cached playlist crawl)
 """
-import json, re, subprocess, sys, time, urllib.parse, urllib.request
+import json, re, subprocess, sys, time, unicodedata, urllib.parse, urllib.request
 from collections import defaultdict
 from pathlib import Path
 
@@ -413,6 +413,79 @@ def fill_lessons_from_series(site, extras):
                     log("  filled", r["lesson"], "from", SERIES_FOR_LESSONS[m.group(1)], "videos", idx[0] + 1, "-", idx[-1] + 1)
 
 
+PLH31_SECTIONS = {"ΑΝΑΖΗΤΗΣΗ": "Αναζήτηση", "ΓΝΩΣΗ": "Γνώση (Λογική)", "ΝΕΥΡΩΝΙΚΑ ΔΙΚΤΥΑ": "Νευρωνικά Δίκτυα",
+                  "ΓΕΝΕΤΙΚΟΙ ΑΛΓΟΡΙΘΜΟΙ": "Γενετικοί Αλγόριθμοι", "PROLOG": "Prolog"}
+
+
+def plain(s):
+    """Upper case without accents, for matching titles that mix "Μάθημα" / "ΜΑΘΗΜΑ"."""
+    return "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn").upper()
+
+
+def build_plh31(extras):
+    """ΠΛΗ31 has no page on psounis.gr, only big series. Every video title carries its lesson ("ΠΛΗ31 ΜΑΘΗΜΑ 1.1: ...")
+    and each lesson is followed by its cards ("ΚΑΡΤΑ - ..."); ΠΛΗ31 ΑΣΚΗΣΕΙΣ holds "ΤΕΣΤ n" and past exams.
+    Build a table in his format (Μάθημα / Βίντεο / Τεστ / Κάρτες) whose cells open at that point of the series."""
+    mine = [p for p in extras if series_of(p["title"]) == "ΠΛΗ31"]
+    if not mine:
+        return None
+    link = lambda pid, start, n: {"video": f"{pid}@{start + 1}", "count": n, "alt": {"v": vids[start][0], "list": pid, "index": start + 1}}
+    course = {"code": "ΠΛΗ31", "slug": "plh31", "source": "channel", "sections": []}
+    lessons, tests = [], None
+    for p in sorted(mine, key=lambda p: p["title"]):
+        vids = playlist_videos(p["id"])
+        if not vids:
+            continue
+        name = next((v for k, v in PLH31_SECTIONS.items() if k in plain(p["title"])), None)
+        whole = [{"id": p["id"], "title": p["title"], "count": len(vids)}]
+        if name:  # a lesson series
+            rows, tag = [], None
+            for i, (_, t) in enumerate(vids):
+                m = re.search(LESSON + r"\s*(\d+(?:\.\d+)*)", plain(t))
+                if m and m.group(1) != tag and m.group(1) not in [r["n"] for r in rows]:
+                    tag = m.group(1)
+                    rest_of_title = re.sub(r"\((?:ΜΕΡΟΣ\s*)?\d+\s*ΑΠΟ\s*\d+\)", "", plain(t)[m.end():])  # "(1 ΑΠΟ 12)"
+                    title = re.split(r"\s+-\s+", rest_of_title.strip(" :-–"))[0].strip()
+                    rows.append({"n": tag, "lesson": f"{'Prolog ' if name == 'Prolog' else ''}{tag}: {title}", **link(p["id"], i, 1)})
+                elif m and m.group(1) == tag:
+                    rows[-1]["count"] += 1
+                elif "ΚΑΡΤΑ" in plain(t) and rows:  # cards of the lesson before
+                    c = rows[-1].get("cards")
+                    if c and c["alt"]["index"] + c["count"] == i + 1:
+                        c["count"] += 1
+                    else:
+                        rows[-1]["cards"] = {"name": "Κάρτες " + rows[-1]["n"], **link(p["id"], i, 1)}
+            for r in rows:
+                r.pop("n")
+            chapter = int(re.match(r"\d+", rows[0]["lesson"]).group(0)) if rows and name != "Prolog" else 99  # Prolog last
+            lessons.append((chapter, {"title": name, "all": whole, "rows": rows}))
+        else:  # ΠΛΗ31 ΑΣΚΗΣΕΙΣ: tests and past exams
+            runs = []  # [tag, start, count]
+            for i, (_, t) in enumerate(vids):
+                m = re.search(r"ΤΕΣΤ\s*(\d+)|ΕΞΕΤΑΣΤΙΚΗ\s*(\d{4})\s*-\s*(\d{4})", plain(t))
+                tag = (f"Τεστ {m.group(1)}" if m.group(1) else f"Εξετάσεις {m.group(2)}-{m.group(3)}") if m else None
+                if runs and runs[-1][0] == tag:
+                    runs[-1][2] += 1
+                elif tag:
+                    runs.append([tag, i, 1])
+            best = {}
+            for tag, start, n in runs:
+                if tag.startswith("Εξετάσεις") and tag in best:  # an exam year comes in several stretches: open at
+                    best[tag] = (best[tag][0], best[tag][1] + n)  # the first one and count them all
+                elif n > best.get(tag, (0, 0))[1]:  # a test can have a stray video elsewhere: keep its main stretch
+                    best[tag] = (start, n)
+            order = sorted(best, key=lambda t: best[t][0])
+            tests = [{"title": "Τεστ", "all": whole,
+                      "rows": [{"lesson": "", "test": {"name": t, **link(p["id"], *best[t])}} for t in order if t.startswith("Τεστ")]},
+                     {"title": "Θέματα Εξετάσεων (λυμένα σε βίντεο)",
+                      "rows": [{"lesson": "", "test": {"name": t, **link(p["id"], *best[t])}} for t in order if not t.startswith("Τεστ")]}]
+    course["sections"] = [s for _, s in sorted(lessons, key=lambda x: x[0])] + (tests or [])
+    for p in mine:
+        p["used"] = True
+    log("ΠΛΗ31:", sum(len(s["rows"]) for s in course["sections"]), "rows from", len(mine), "series")
+    return course
+
+
 _where = {}
 
 
@@ -481,6 +554,10 @@ def main():
     fill_lessons_from_series(site, rest)
     fetch_videos(pls, [o["video"] for o in links if o.get("video") and not o.get("gone")])  # gap fillers
     rest = [p for p in rest if not merged_into_table(p, site, pls)]
+    plh31 = build_plh31(rest)
+    if plh31:
+        site.append(plh31)
+        rest = [p for p in rest if not p.get("used")]
     groups = defaultdict(list)
     for p in rest:
         name = series_of(p["title"])
