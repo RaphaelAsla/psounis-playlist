@@ -148,3 +148,5 @@ td.muted, .muted { color: var(--muted); }
   .list .item .yt { flex-basis: 100%; }
 }
 .gone { font-size: 12px; color: var(--muted); font-style: italic; }
+.whole { display: block; margin: 4px 0 0 !important; font-weight: 400; }
+.whole a { font-weight: 500; }

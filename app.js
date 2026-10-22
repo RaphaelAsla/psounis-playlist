@@ -21,19 +21,27 @@
   const plural = n => n == null ? "" : `<small>${n} βίντεο</small>`;
   const ytUrl = id => `https://www.youtube.com/playlist?list=${id}`;
 
-  const yt = (id, label, count) => id
-    ? `<a class="yt" href="${ytUrl(id)}" target="_blank" rel="noopener"><span>${esc(label)}</span>${plural(count)}</a>` : "";
+  const yt = (id, label, count, url = ytUrl(id), title = "") => id
+    ? `<a class="yt" href="${url}" target="_blank" rel="noopener"${title && ` title="${title}"`}><span>${esc(label)}</span>${plural(count)}</a>` : "";
   const st = id => id ? `<span class="st" data-id="${id}">
       <button class="w${status[id] === "w" ? " on" : ""}" data-s="w" title="Το είδα">✓<span class="lbl">Είδα</span></button>
       <button class="r${status[id] === "r" ? " on" : ""}" data-s="r" title="Θέλει επανάληψη">↻<span class="lbl">Επανάληψη</span></button>
     </span>` : "";
   const pdf = (url, label = "PDF") => url ? `<a class="pdf" href="${url}" target="_blank" rel="noopener">${label}</a>` : "";
-  // o = row / test / cards object; psounis.gr still links some playlists that were deleted from YouTube
-  const video = (o, label) => !o.video ? "" : o.gone
-    ? `<span class="gone" title="Η playlist έχει διαγραφεί από το YouTube">δεν υπάρχει πια</span>`
-    : yt(o.video, label, o.count) + st(o.video);
+  // o = row / test / cards object. o.alt = where to play it when it has no playlist of its own: a deleted
+  // playlist whose videos live on in a bigger series (alt.list from alt.index) or as a single video (alt.v),
+  // or an empty cell of his table whose lesson is inside one of his series
+  const usable = o => o && o.video && (!o.gone || o.alt);
+  const urlOf = o => !o.alt ? ytUrl(o.video)
+    : `https://www.youtube.com/watch?v=${o.alt.v}` + (o.alt.list ? `&list=${o.alt.list}&index=${o.alt.index}` : "");
+  const noteOf = o => !o.alt ? "" : o.alt.list
+    ? "Ανοίγει στο σημείο του μαθήματος μέσα στη μεγάλη σειρά" + (o.gone ? " (η αρχική playlist διαγράφηκε)" : "")
+    : "Η αρχική playlist διαγράφηκε· ανοίγει το βίντεο";
+  const video = (o, label) => !o.video ? ""
+    : !usable(o) ? `<span class="gone" title="Η playlist και τα βίντεό της δεν υπάρχουν πια στο YouTube">δεν υπάρχει πια</span>`
+    : yt(o.video, label, o.count, urlOf(o), noteOf(o)) + st(o.video);
 
-  const rowIds = r => [r, r.test, r.cards].filter(o => o && o.video && !o.gone).map(o => o.video);
+  const rowIds = r => [r, r.test, r.cards].filter(usable).map(o => o.video);
   const rowClass = ids => ids.length && ids.some(i => status[i] === "r") ? "rev" : ids.length && ids.every(i => status[i] === "w") ? "done" : "";
   const extraFor = code => D.series.find(s => s.name === code)?.playlists || [];
 
@@ -85,8 +93,7 @@
       const rows = s.rows.filter(r => keep(rowIds(r)));
       if (!rows.length && filter !== "all") return;
       body += `<tr class="chapter"><td class="ch" colspan="${cols}">${esc(s.title || "—")}${s.typologio ? `<span class="typ">Τυπολόγιο: ${pdf(s.typologio)}</span>` : ""}${
-        extra.length && s.rows.some(r => [r, r.test, r.cards].some(o => o?.gone))
-          ? `<span class="typ muted">· κάποιες playlists διαγράφηκαν, δες τις <a href="#${c.slug}" data-jump="extra">πλήρεις σειρές ↓</a></span>` : ""}</td></tr>`;
+        whole(s.all, "όλη η ενότητα σε μία playlist")}</td></tr>`;
       rows.forEach(r => {
         const ids = rowIds(r);
         const sub = (o, label) => o ? `<div class="cell"><span class="name">${esc(o.name)}</span>${pdf(o.pdf)}${pdf(o.sol, "Λύσεις")}${video(o, "Βίντεο")}</div>` : "";
@@ -107,15 +114,20 @@
     main.innerHTML = `
       <h1>${esc(c.code)}</h1>
       <p class="sub">Όπως στο <a href="https://psounis.gr/${c.slug}.html" target="_blank" rel="noopener">psounis.gr/${c.slug}</a>,
-        με δωρεάν PDF από το GitHub αντί για slideshare.${extra.length ? ` <a href="#${c.slug}" data-jump="extra">${extra.length} επιπλέον playlists ↓</a>` : ""}</p>
+        με δωρεάν PDF από το GitHub αντί για slideshare.${extra.length ? ` <a href="#${c.slug}" data-jump="extra">${extra.length} playlists με βίντεο εκτός πίνακα ↓</a>` : ""}</p>
+      ${c.all ? `<p class="sub">${whole(c.all, "πολλές ενότητες σε μία playlist")}</p>` : ""}
       ${filterBar(courseIds(c))}
       <div class="table-wrap"><table>
         <thead><tr><th>Μάθημα</th><th>Σημειώσεις</th><th>Βίντεο</th><th>Τεστ</th><th>Κάρτες</th></tr></thead>
         <tbody>${body || `<tr><td colspan="${cols}" class="empty">Τίποτα εδώ με αυτό το φίλτρο.</td></tr>`}</tbody>
       </table></div>
-      ${extra.length ? `<h2 id="extra">Επιπλέον playlists ${esc(c.code)} στο κανάλι <span class="badge">δεν υπάρχουν στο psounis.gr</span></h2>
+      ${extra.length ? `<h2 id="extra">Επιπλέον playlists ${esc(c.code)} στο κανάλι <span class="badge">βίντεο που δεν είναι στον πίνακα</span></h2>
         ${seriesList(extra)}` : ""}`;
   }
+
+  // series on the channel whose videos are all already in the table above: just a "play it all in one go" link
+  const whole = (list, label) => list?.length ? `<span class="typ whole">▶ ${label}: ${list.map(a =>
+    `<a href="${ytUrl(a.id)}" target="_blank" rel="noopener">${esc(a.title)}${a.count ? ` (${a.count})` : ""}</a>`).join(" · ")}</span>` : "";
 
   function seriesList(pls) {
     const shown = pls.filter(p => keep([p.id]));
@@ -130,7 +142,8 @@
 
   function itemRow(p) {
     const cls = status[p.id] === "w" ? "done" : status[p.id] === "r" ? "rev" : "";
-    return `<div class="item ${cls}">${yt(p.id, p.title, p.count)}${p.where ? `<span class="kind">${esc(p.where)}</span>` : ""}${st(p.id)}</div>`;
+    return `<div class="item ${cls}">${yt(p.id, p.title, p.count, p.url)}${p.new != null && p.new < p.count ? `<span class="kind" title="Τα υπόλοιπα βίντεο της playlist είναι ήδη στον πίνακα">${p.new} νέα</span>` : ""}${
+      p.where ? `<span class="kind">${esc(p.where)}</span>` : ""}${st(p.id)}</div>`;
   }
 
   // every trackable playlist, with where it lives (for search + review list)
@@ -139,8 +152,8 @@
     if (_all) return _all;
     const map = new Map();
     D.courses.forEach(c => c.sections.forEach(s => s.rows.forEach(r => {
-      const add = (o, title) => o?.video && !o.gone && !map.has(o.video) &&
-        map.set(o.video, { id: o.video, title, count: o.count, where: `${c.code} · ${s.title}`, text: `${s.title} ${r.lesson} ${title}` });
+      const add = (o, title) => usable(o) && !map.has(o.video) &&
+        map.set(o.video, { id: o.video, title, count: o.count, url: urlOf(o), where: `${c.code} · ${s.title}`, text: `${s.title} ${r.lesson} ${title}` });
       add(r, r.lesson);
       add(r.test, `${r.lesson} — ${r.test?.name}`);
       add(r.cards, `${r.lesson} — ${r.cards?.name}`);

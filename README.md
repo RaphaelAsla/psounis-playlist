@@ -38,8 +38,15 @@ The script reads three sources:
    that yt-dlp skips) and searches inside the channel.
 
 YouTube sometimes returns partial lists, so the crawl adds to `scripts/.playlists-cache.json` instead of replacing it.
-`--reuse` skips the crawl entirely. The script then rewrites `data.js`: playlists that psounis.gr already links stay in the
-course tables, and the other ΕΑΠ playlists are assigned to a course by their title (see `SERIES_ALIASES`).
+`--reuse` skips the crawl entirely. The script then rewrites `data.js`. Playlists that psounis.gr already links stay in the
+course tables. The other ΕΑΠ playlists are assigned to a course by their title (see `SERIES_ALIASES`), and their video IDs
+are compared with the table's (only the IDs are fetched, never the videos):
+- a playlist that fills an empty cell (e.g. "ΠΛΗ30 ΤΕΣΤ 6") goes into that cell;
+- one whose videos are all in the table already becomes a "▶ whole chapter in one playlist" link;
+- the rest are listed as extras, with how many of their videos are new.
+
+Links on psounis.gr to playlists that were since deleted are pointed at the same lesson inside the series it was merged
+into (or at its single video).
 
 ## Disclaimer
 

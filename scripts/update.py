@@ -45,9 +45,9 @@ def get(url, data=None, headers=None):
     raise RuntimeError("failed: " + url)
 
 
-def list_id(href):
+def list_id(href, key="list"):
     q = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
-    return q.get("list", [None])[0]
+    return q.get(key, [None])[0]
 
 
 # ---------------------------------------------------------------- 1+2. psounis.gr + GitHub PDFs
@@ -88,8 +88,10 @@ def scrape_site():
         return td.get_text(" ", strip=True) if td is not None else ""
 
     def yt(*tds):
-        return next((list_id(a.get("href", "")) for td in tds if td is not None
-                     for a in td.find_all("a") if "youtube" in a.get("href", "")), None)
+        """{"video": playlist id, "v": first video id} of the first YouTube link in these cells."""
+        href = next((a.get("href", "") for td in tds if td is not None
+                     for a in td.find_all("a") if "youtube" in a.get("href", "")), "")
+        return {"video": list_id(href), "v": list_id(href, "v")} if href else {"video": None}
 
     courses = []
     for code in ("10", "20", "30"):
@@ -125,9 +127,9 @@ def scrape_site():
                 section = new_section(title or "")
             if group and section["group"] is None:
                 section["group"] = group
-            row = {"lesson": lesson, "video": yt(c[3])}
+            row = {"lesson": lesson, **yt(c[3])}
             if test_name:
-                row["test"] = {"name": test_name, "video": yt(c[4], c[5], c[6])}
+                row["test"] = {"name": test_name, **yt(c[4], c[5], c[6])}
                 t = re.match(r"Τεστ\s*(\d+)$", test_name)
                 d = re.match(r"Επ\.\s*Διαγ\.\s*(\d+)", test_name)
                 if t:
@@ -136,7 +138,7 @@ def scrape_site():
                     row["test"]["pdf"] = pdf(f"{p}_epan_diagonisma{d.group(1)}.pdf")
                     row["test"]["sol"] = pdf(f"{p}_epan_diagonisma{d.group(1)}_liseis.pdf")
             if text(c[7]):
-                row["cards"] = {"name": "Κάρτες " + text(c[7]).rstrip(":"), "video": yt(c[10], c[9])}
+                row["cards"] = {"name": "Κάρτες " + text(c[7]).rstrip(":"), **yt(c[10], c[9])}
             if num:
                 a, b = num.groups()
                 row["pdf"] = pdf(f"{p}_lesson_{a}_{b}.pdf")
@@ -277,6 +279,175 @@ def lesson_key(title):
     return tuple(int(x) for x in m.group(1).split(".")) if m else None
 
 
+def playlist_videos(pid):
+    """[(video id, title)] of a playlist, via yt-dlp."""
+    r = subprocess.run(["yt-dlp", "--flat-playlist", "-J", "--extractor-retries", "5",
+                        f"https://www.youtube.com/playlist?list={pid}"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+    return [(e["id"], e.get("title") or "") for e in (json.loads(r.stdout or "{}").get("entries") or [])]
+
+
+def fetch_videos(pls, ids):
+    """Store the video ids of each playlist in pls[id]["videos"] (cached; only missing ones are fetched)."""
+    from concurrent.futures import ThreadPoolExecutor
+    todo = [i for i in dict.fromkeys(ids) if i in pls and "videos" not in pls[i] and not pls[i].get("gone")]
+    log("fetching video lists of", len(todo), "playlists")
+
+    def one(pid):
+        try:
+            return pid, [v for v, _ in playlist_videos(pid)]
+        except Exception as e:
+            log("  videos failed", pid, e)
+            return pid, None
+    with ThreadPoolExecutor(4) as ex:
+        for pid, vids in ex.map(one, todo):
+            if vids:  # an empty answer is usually throttling: try again next run
+                pls[pid]["videos"] = vids
+
+
+def relink_gone(site, candidates):
+    """Many deleted per-lesson playlists were merged into a big series (e.g. ΠΛΗ10 2.x -> ΨΕΥΔΟΓΛΩΣΣΑ).
+    psounis.gr links point at the playlist's first video, which still exists: find the live playlist
+    that contains it and link into that, so the lesson still plays in order."""
+    links = [o for c in site for s in c["sections"] for r in s["rows"] for o in (r, r.get("test") or {}, r.get("cards") or {})]
+    gone = [o for o in links if o.get("gone") and o.get("v")]
+    for o in links:  # the first-video id is only needed for deleted playlists
+        if not o.get("gone"):
+            o.pop("v", None)
+    if not gone:
+        return
+    where = {}  # video id -> (playlist id, 1-based index, all entries of that playlist)
+    for p in sorted(candidates, key=lambda p: -(p["count"] or 0)):  # prefer the big series
+        try:
+            vids = playlist_videos(p["id"])
+        except Exception as e:
+            log("  videos failed", p["id"], e); continue
+        for i, (vid, _) in enumerate(vids):
+            where.setdefault(vid, (p["id"], i + 1, vids))
+        if all(o["v"] in where for o in gone):
+            break
+    for o in gone:
+        if o["v"] not in where:  # not in any playlist any more: link the single video, if it still exists
+            try:
+                get(f"https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v={o['v']}")
+                o["alt"] = {"v": o["v"]}
+            except RuntimeError:
+                pass
+            continue
+        pid, idx, vids = where[o["v"]]
+        # the lesson's videos are the consecutive ones that share the first video's "ΜΑΘΗΜΑ x.y" / "ΤΕΣΤ n" tag
+        tag = re.search(LESSON + r"\s*\d+(?:\.\d+)*|ΤΕΣΤ\s*\d+", vids[idx - 1][1], re.I)
+        n = 1
+        while tag and idx - 1 + n < len(vids) and tag.group(0).upper() in vids[idx - 1 + n][1].upper():
+            n += 1
+        o["alt"] = {"v": o["v"], "list": pid, "index": idx}
+        o["count"] = n if tag else None
+    log("deleted playlists:", len(gone), "-> in a live series:", sum("list" in o.get("alt", {}) for o in gone),
+        "/ single video:", sum(o.get("alt", {}).keys() == {"v"} for o in gone), "/ nothing left:", sum("alt" not in o for o in gone))
+
+
+def site_videos(course, pls):
+    """video id -> (section, playlist id) for every video reachable from a course's psounis.gr table."""
+    where = {}
+    for s in course["sections"]:
+        for r in s["rows"]:
+            for o in (r, r.get("test") or {}, r.get("cards") or {}):
+                a = o.get("alt") or {}
+                if not o.get("video"):
+                    continue
+                if "list" in a:  # lesson linked into a bigger series: its stretch of that series
+                    vids, owner = pls.get(a["list"], {}).get("videos", [])[a["index"] - 1:a["index"] - 1 + (o.get("count") or 1)], o["video"]
+                elif not o.get("gone"):
+                    vids, owner = pls.get(o["video"], {}).get("videos") or [], o["video"]
+                else:
+                    vids, owner = [a.get("v")], o["video"]
+                for v in vids:
+                    where.setdefault(v, (s, owner))
+    return where
+
+
+def course_of(p, site):
+    return next((c for c in site if c["code"] == series_of(p["title"])), None)
+
+
+def fill_gap(p, site):
+    """True if this extra playlist fills an empty cell of his table (e.g. "ΠΛΗ30 ΤΕΣΤ 6", whose cell has no video)."""
+    course, k = course_of(p, site), lesson_key(p["title"])
+    if course is None:
+        return False
+    rows = [r for s in course["sections"] for r in s["rows"]]
+    if kind_of(p["title"]) == "test" and k:
+        cells = [r["test"] for r in rows if (r.get("test") or {}).get("name", "").upper() == f"ΤΕΣΤ {k[0]}"]
+    elif kind_of(p["title"]) == "cards" and re.search(r"ΜΑΘΗΜΑΤΟΣ\s*(\d+\.\d+)", p["title"]):
+        n = re.search(r"ΜΑΘΗΜΑΤΟΣ\s*(\d+\.\d+)", p["title"]).group(1)  # "ΠΛΗ20 ΚΑΡΤΕΣ ΜΑΘΗΜΑΤΟΣ 1.1"
+        cells = [r["cards"] for r in rows if r.get("cards") and r["lesson"].startswith(n + ":")]
+    else:
+        return False
+    for o in cells:
+        if not usable_link(o):
+            o.update(video=p["id"], count=p["count"])
+            o.pop("gone", None); o.pop("alt", None)
+            return True
+    return False
+
+
+SERIES_FOR_LESSONS = {"C Μάθημα": "ΓΛΩΣΣΑ C", "Αλγόριθμοι C": "ΑΛΓΟΡΙΘΜΟΙ ΣΕ C", "Δομές C": "ΔΟΜΕΣ ΔΕΔΟΜΕΝΩΝ ΣΕ C"}
+
+
+def fill_lessons_from_series(site, extras):
+    """Some lesson rows of his ΠΛΗ10 table have no video, but the lesson is inside one of his big C series
+    (e.g. "C Μάθημα 5" = videos 26-37 of ΓΛΩΣΣΑ C): link into the series at that point."""
+    by_title, videos = {p["title"]: p["id"] for p in extras}, {}
+    for c in site:
+        for s in c["sections"]:
+            for r in s["rows"]:
+                m = re.match(r"(C Μάθημα|Αλγόριθμοι C|Δομές C)\s*(\d+)", r["lesson"])
+                if r.get("video") or not m or SERIES_FOR_LESSONS[m.group(1)] not in by_title:
+                    continue
+                pid = by_title[SERIES_FOR_LESSONS[m.group(1)]]
+                vids = videos.setdefault(pid, playlist_videos(pid))
+                idx = [i for i, (_, t) in enumerate(vids) if re.search(LESSON + r"\s*" + m.group(2) + r"(?![\d.])", t)]
+                if idx:  # synthetic id (playlist@index) so it can still be marked watched
+                    r.update(video=f"{pid}@{idx[0] + 1}", count=len(idx),
+                             alt={"v": vids[idx[0]][0], "list": pid, "index": idx[0] + 1})
+                    log("  filled", r["lesson"], "from", SERIES_FOR_LESSONS[m.group(1)], "videos", idx[0] + 1, "-", idx[-1] + 1)
+
+
+_where = {}
+
+
+def merged_into_table(p, site, pls):
+    """Compare an extra playlist's videos with the course table. True when they are already there (so it is not
+    listed as an extra): a merged "whole chapter" series becomes a link on that chapter (or on the course, if it
+    spans chapters); a copy of a single lesson is dropped. Otherwise p["new"] = videos not in the table."""
+    course = course_of(p, site)
+    vids = pls.get(p["id"], {}).get("videos")
+    if course is None or not vids:  # ΠΛΗ31 has no table to compare with
+        return False
+    where = _where.setdefault(course["code"], site_videos(course, pls))
+    hits = [where[v] for v in vids if v in where]
+    if len(hits) < 0.9 * len(vids):
+        p["new"] = len(vids) - len(hits)
+        return False
+    if len({owner for _, owner in hits}) == 1:  # just a copy of one lesson's playlist
+        return True
+    link = {"id": p["id"], "title": p["title"], "count": p["count"]}
+    secs = defaultdict(int)
+    for s, _ in hits:
+        secs[id(s)] += 1
+    top = max(secs.values())
+    if top >= 0.9 * len(vids):
+        s = next(s for s, _ in hits if secs[id(s)] == top)
+        s.setdefault("all", []).append(link)
+    else:
+        course.setdefault("all", []).append(link)
+    return True
+
+
+def usable_link(o):
+    return bool(o.get("video")) and (not o.get("gone") or bool(o.get("alt")))
+
+
 def main():
     site = scrape_site()
     linked = {v for c in site for s in c["sections"] for r in s["rows"]
@@ -300,6 +471,16 @@ def main():
                         if pls[obj["video"]].get("gone"):  # psounis.gr still links playlists that were deleted
                             obj["gone"] = True
     rest = [p for pid, p in pls.items() if pid not in linked and p["title"] and not p.get("gone")]
+    relink_gone(site, [p for p in rest if series_of(p["title"])])
+    links = [o for c in site for s in c["sections"] for r in s["rows"] for o in (r, r.get("test") or {}, r.get("cards") or {})]
+    fetch_videos(pls, [o["video"] for o in links if o.get("video") and not o.get("gone")]
+                 + [o["alt"]["list"] for o in links if "list" in o.get("alt", {})]
+                 + [p["id"] for p in rest if series_of(p["title"])])
+    cache.write_text(json.dumps(pls, ensure_ascii=False), encoding="utf-8")
+    rest = [p for p in rest if series_of(p["title"]) and not fill_gap(p, site)]
+    fill_lessons_from_series(site, rest)
+    fetch_videos(pls, [o["video"] for o in links if o.get("video") and not o.get("gone")])  # gap fillers
+    rest = [p for p in rest if not merged_into_table(p, site, pls)]
     groups = defaultdict(list)
     for p in rest:
         name = series_of(p["title"])
@@ -311,7 +492,7 @@ def main():
         items = sorted(groups.get(name, []), key=lambda p: ({"collection": 0, "lesson": 1, "test": 2, "cards": 3, "exam": 4, "exercises": 5}[p["kind"]],
                                                             p["key"] or (999,), p["title"]))
         if items:
-            series.append({"name": name, "playlists": [{k: p[k] for k in ("id", "title", "count", "kind")} for p in items]})
+            series.append({"name": name, "playlists": [{k: p[k] for k in ("id", "title", "count", "kind", "new") if k in p} for p in items]})
     extra = sum(len(s["playlists"]) for s in series)
     data = {"generated": time.strftime("%Y-%m-%d"), "courses": site, "series": series,
             "total": sum(1 for pid in linked if not pls.get(pid, {}).get("gone")) + extra}
