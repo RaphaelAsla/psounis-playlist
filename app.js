@@ -17,17 +17,19 @@
 
   // ---------------------------------------------------------------- helpers
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const norm = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  const plural = n => n == null ? "" : `<small>${n} βίντεο</small>`;
+  const norm = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   const ytUrl = id => `https://www.youtube.com/playlist?list=${id}`;
+  const REVIEW_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
-  const yt = (id, label, count, url = ytUrl(id), title = "") => id
-    ? `<a class="yt" href="${url}" target="_blank" rel="noopener"${title && ` title="${title}"`}><span>${esc(label)}</span>${plural(count)}</a>` : "";
-  const st = id => id ? `<span class="st" data-id="${id}">
-      <button class="w${status[id] === "w" ? " on" : ""}" data-s="w" title="Το είδα">✓<span class="lbl">Είδα</span></button>
-      <button class="r${status[id] === "r" ? " on" : ""}" data-s="r" title="Θέλει επανάληψη">↻<span class="lbl">Επανάληψη</span></button>
-    </span>` : "";
-  const pdf = (url, label = "PDF") => url ? `<a class="pdf" href="${url}" target="_blank" rel="noopener">${label}</a>` : "";
+  const link = (url, label, n, title = "") => `<a href="${url}" target="_blank" rel="noopener"${title && ` title="${title}"`}>${esc(label)}</a>${
+    n == null ? "" : ` <span class="n">${n} βίντεο</span>`}`;
+  // one tracked playlist: watched checkbox · link · video count · "review again" toggle
+  const pl = (id, label, n, url = ytUrl(id), title = "") => `<span class="pl">
+      <input type="checkbox" class="chk" data-id="${id}" data-s="w"${status[id] === "w" ? " checked" : ""} title="Το είδα" aria-label="Είδα: ${esc(label)}">
+      <span>${link(url, label, n, title)}
+      <button class="rev-btn${status[id] === "r" ? " on" : ""}" data-id="${id}" data-s="r" aria-pressed="${status[id] === "r"}" title="Θέλει επανάληψη" aria-label="Επανάληψη: ${esc(label)}">${REVIEW_ICON}</button></span></span>`;
+  const pdf = (url, label = "PDF") => url ? `<a href="${url}" target="_blank" rel="noopener">${label}</a>` : "";
+  const docs = (...links) => links.some(Boolean) ? `<span class="docs">${links.join("")}</span>` : "";
   // o = row / test / cards object. o.alt = where to play it when it has no playlist of its own: a deleted
   // playlist whose videos live on in a bigger series (alt.list from alt.index) or as a single video (alt.v),
   // or an empty cell of his table whose lesson is inside one of his series
@@ -37,11 +39,12 @@
   const noteOf = o => !o.alt ? "" : o.alt.list
     ? "Ανοίγει στο σημείο του μαθήματος μέσα στη μεγάλη σειρά" + (o.gone ? " (η αρχική playlist διαγράφηκε)" : "")
     : "Η αρχική playlist διαγράφηκε· ανοίγει το βίντεο";
-  const video = (o, label) => !o.video ? ""
-    : !usable(o) ? `<span class="gone" title="Η playlist και τα βίντεό της δεν υπάρχουν πια στο YouTube">δεν υπάρχει πια</span>`
-    : yt(o.video, label, o.count, urlOf(o), noteOf(o)) + st(o.video);
+  const video = (o, label, track = true) => !o.video ? esc(label)
+    : !usable(o) ? `${esc(label)} <span class="gone" title="Η playlist και τα βίντεό της δεν υπάρχουν πια στο YouTube">δεν υπάρχει πια</span>`
+    : track ? pl(o.video, label, o.count, urlOf(o), noteOf(o)) : link(urlOf(o), label, o.count, noteOf(o));
 
-  const rowIds = r => [r, r.test, r.cards].filter(usable).map(o => o.video);
+  // only the lesson playlists are tracked; tests and cards are plain links
+  const rowIds = r => usable(r) ? [r.video] : [];
   const rowClass = ids => ids.length && ids.some(i => status[i] === "r") ? "rev" : ids.length && ids.every(i => status[i] === "w") ? "done" : "";
   const extraFor = code => D.series.find(s => s.name === code)?.playlists || [];
 
@@ -55,7 +58,7 @@
     const n = ids.length, w = ids.filter(i => status[i] === "w").length, r = ids.filter(i => status[i] === "r").length;
     const pct = x => n ? (100 * x / n).toFixed(1) : 0;
     return `<div class="bar"><i class="w" style="width:${pct(w)}%"></i><i class="r" style="width:${pct(r)}%"></i></div>
-      <div class="bar-label">${w}/${n} είδα${r ? ` · ${r} για επανάληψη` : ""}</div>`;
+      <div class="bar-label">${w} / ${n} είδα${r ? ` · ${r} για επανάληψη` : ""}</div>`;
   }
 
   // ---------------------------------------------------------------- filter (all / not seen / review)
@@ -70,82 +73,83 @@
         <button data-f="todo" class="${filter === "todo" ? "on" : ""}">Δεν έχω δει</button>
         <button data-f="review" class="${filter === "review" ? "on" : ""}">Επανάληψη</button>
       </div></div>`;
+  const allLinks = (list, label) => list?.length ? `<div class="all">${label}: ${list.map(a =>
+    `<a href="${ytUrl(a.id)}" target="_blank" rel="noopener">${esc(a.title)}</a>${a.count ? ` <span class="n">${a.count}</span>` : ""}`).join(" · ")}</div>` : "";
 
   // ---------------------------------------------------------------- views
   function viewHome() {
-    const card = c => `<a class="card" href="#${c.slug}"><h3>${esc(c.code)}</h3>
-      <p>${[c.sections.length && `${c.sections.length} ενότητες`, extraFor(c.code).length && `${extraFor(c.code).length} playlists εκτός πίνακα`,
-        c.source === "channel" && "μόνο στο κανάλι"].filter(Boolean).join(" · ")}</p>${progress(courseIds(c))}</a>`;
-    const reviews = allItems().filter(x => status[x.id] === "r");
+    const line = (href, title, ids) => {
+      const w = ids.filter(i => status[i] === "w").length;
+      return `<a class="sec${w === ids.length ? " full" : ""}" href="${href}"><span>${esc(title)}</span><span class="n">${w} / ${ids.length}</span></a>`;
+    };
+    const course = c => {
+      const secs = c.sections.map((s, i) => [`#${c.slug}/s${i}`, s.title || "—", [...new Set(s.rows.flatMap(rowIds))]]);
+      if (extraFor(c.code).length) secs.push([`#${c.slug}/extra`, "Επιπλέον playlists", extraFor(c.code).map(p => p.id)]);
+      return `<section class="course"><h2><a href="#${c.slug}">${esc(c.code)}</a></h2>${progress(courseIds(c))}
+        <div class="secs">${secs.filter(s => s[2].length).map(s => line(...s)).join("")}</div></section>`;
+    };
+    const reviews = allItems().filter(x => x.track !== false && status[x.id] === "r");
     main.innerHTML = `
-      <h1>Οι playlists του Δ. Ψούνη για τα μαθήματα του ΕΑΠ</h1>
-      <p class="sub">Η δομή των ΠΛΗ10/20/30 είναι ίδια με το <a href="https://psounis.gr/" target="_blank" rel="noopener">psounis.gr</a>,
-        συν ${D.series.reduce((n, s) => n + s.playlists.length, 0)} playlists του καναλιού για τα ίδια μαθήματα (και το ΠΛΗ31) που δεν εμφανίζονται εκεί.
-        Σημειώστε <b>✓ Είδα</b> ή <b>↻ Επανάληψη</b> σε κάθε playlist.</p>
-      ${reviews.length ? `<h2>Για επανάληψη</h2><div class="table-wrap list">${reviews.map(itemRow).join("")}</div>` : ""}
-      <h2>Μαθήματα</h2>
-      <div class="cards">${COURSES.map(card).join("")}</div>`;
+      <h1>Οι playlists του Δ. Ψούνη για το ΕΑΠ</h1>
+      <p class="sub">Τα μαθήματα, τα τεστ και οι κάρτες κάθε ενότητας, με τις σημειώσεις σε PDF.<br>
+        Τσεκάρετε ό,τι έχετε δει και πατήστε ${REVIEW_ICON.replace("<svg", '<svg class="inline"')} για όσα θέλουν επανάληψη.</p>
+      ${reviews.length ? `<h2>Για επανάληψη</h2><div class="list">${reviews.map(itemRow).join("")}</div>` : ""}
+      <div class="courses">${COURSES.map(course).join("")}</div>`;
   }
 
   function viewCourse(c) {
-    const extra = extraFor(c.code), notes = c.sections.some(s => s.rows.some(r => r.pdf || r.pdf4)), cols = notes ? 5 : 4;
-    let body = "";
-    c.sections.forEach(s => {
-      const rows = s.rows.filter(r => keep(rowIds(r)));
-      if (!rows.length && filter !== "all") return;
-      body += `<tr class="chapter"><td class="ch" colspan="${cols}">${esc(s.title || "—")}${s.typologio ? `<span class="typ">Τυπολόγιο: ${pdf(s.typologio)}</span>` : ""}${
-        whole(s.all, "όλη η ενότητα σε μία playlist")}</td></tr>`;
-      rows.forEach(r => {
-        const ids = rowIds(r);
-        const sub = (o, label) => o ? `<div class="cell"><span class="name">${esc(o.name)}</span>${pdf(o.pdf)}${pdf(o.sol, "Λύσεις")}${video(o, "Βίντεο")}</div>` : "";
-        body += `<tr class="${rowClass(ids)}">
-          <td class="lesson">${esc(r.lesson)}</td>
-          ${notes ? `<td data-h="Σημειώσεις" class="${r.pdf || r.pdf4 ? "" : "empty-cell"}"><div class="cell">${pdf(r.pdf)}${pdf(r.pdf4, "4 σε 1")}</div></td>` : ""}
-          <td data-h="Βίντεο" class="${r.video ? "" : "empty-cell"}"><div class="cell">${video(r, "Playlist")}</div></td>
-          <td data-h="Τεστ" class="${r.test ? "" : "empty-cell"}">${sub(r.test)}</td>
-          <td data-h="Κάρτες" class="${r.cards ? "" : "empty-cell"}">${sub(r.cards)}</td></tr>`;
-      });
-    });
+    const extra = extraFor(c.code), notes = c.sections.some(s => s.rows.some(r => r.pdf || r.pdf4)), cols = notes ? 4 : 3;
+    const extraList = extra.length ? `<h2 id="extra">Επιπλέον playlists</h2>
+      <p class="sub">Βίντεο του καναλιού για το ${esc(c.code)} που δεν είναι στον πίνακα.</p>${seriesList(extra)}` : "";
+    // channel-only courses (ΠΛΗ31) have no per-lesson playlists: every link is a position inside a big series
+    const sub = c.source === "channel" ? `<p class="sub">Για το ${esc(c.code)} δεν υπάρχουν playlists ανά μάθημα. Κάθε σύνδεσμος ανοίγει
+      την πλήρη σειρά στο πρώτο βίντεο του μαθήματος και το YouTube συνεχίζει κατευθείαν στο επόμενο, οπότε προσέξτε πού
+      τελειώνει το μάθημα (τα βίντεό του φαίνονται δίπλα στον τίτλο).</p>` : "";
     if (!c.sections.length) {
-      main.innerHTML = `<h1>${esc(c.code)}</h1>
-        <p class="sub">Δεν υπάρχει σελίδα στο psounis.gr· αυτές είναι οι ${extra.length} playlists του καναλιού για το μάθημα.</p>
-        ${filterBar(courseIds(c))}${seriesList(extra)}`;
+      main.innerHTML = `<h1>${esc(c.code)}</h1>${filterBar(courseIds(c))}${seriesList(extra)}`;
       return;
     }
+    let body = "";
+    c.sections.forEach((s, i) => {
+      const rows = s.rows.filter(r => keep(rowIds(r)));
+      if (!rows.length && filter !== "all") return;
+      body += `<tr class="chapter" id="s${i}"><td colspan="${cols}">${esc(s.title || "—")}${s.typologio ? ` <span class="docs">${pdf(s.typologio, "Τυπολόγιο")}</span>` : ""}${
+        allLinks(s.all, "Όλη η ενότητα σε μία playlist")}</td></tr>`;
+      rows.forEach(r => {
+        const cell = (o, h) => `<td data-h="${h}" class="${o ? "" : "empty-cell"}">${o ? `<div class="cell"><span>${video(o, o.name, false)}</span>${docs(pdf(o.pdf), pdf(o.sol, "Λύσεις"))}</div>` : ""}</td>`;
+        body += `<tr class="${rowClass(rowIds(r))}">
+          <td class="lesson${r.lesson || r.video ? "" : " empty-cell"}">${r.video ? video(r, r.lesson || "Playlist") : esc(r.lesson)}</td>
+          ${notes ? `<td class="${r.pdf || r.pdf4 ? "" : "empty-cell"}">${docs(pdf(r.pdf), pdf(r.pdf4, "4 σε 1"))}</td>` : ""}
+          ${cell(r.test, "Τεστ")}${cell(r.cards, "Κάρτες")}</tr>`;
+      });
+    });
     main.innerHTML = `
       <h1>${esc(c.code)}</h1>
-      <p class="sub">${c.source === "channel"
-        ? "Δεν υπάρχει σελίδα στο psounis.gr· ο πίνακας είναι φτιαγμένος από τις σειρές του καναλιού, με την ίδια μορφή. Κάθε κελί ανοίγει στο σημείο του μαθήματος μέσα στη σειρά."
-        : `Όπως στο <a href="https://psounis.gr/${c.slug}.html" target="_blank" rel="noopener">psounis.gr/${c.slug}</a>, με δωρεάν PDF από το GitHub αντί για slideshare.`}${extra.length ? ` <a href="#${c.slug}" data-jump="extra">${extra.length} playlists με βίντεο εκτός πίνακα ↓</a>` : ""}</p>
-      ${c.all ? `<p class="sub">${whole(c.all, "πολλές ενότητες σε μία playlist")}</p>` : ""}
+      ${sub}
       ${filterBar(courseIds(c))}
-      <div class="table-wrap"><table>
-        <thead><tr><th>Μάθημα</th>${notes ? "<th>Σημειώσεις</th>" : ""}<th>Βίντεο</th><th>Τεστ</th><th>Κάρτες</th></tr></thead>
+      <table>
+        <thead><tr><th>Μάθημα</th>${notes ? "<th>Σημειώσεις</th>" : ""}<th>Τεστ</th><th>Κάρτες</th></tr></thead>
         <tbody>${body || `<tr><td colspan="${cols}" class="empty">Τίποτα εδώ με αυτό το φίλτρο.</td></tr>`}</tbody>
-      </table></div>
-      ${extra.length ? `<h2 id="extra">Επιπλέον playlists ${esc(c.code)} στο κανάλι <span class="badge">βίντεο που δεν είναι στον πίνακα</span></h2>
-        ${seriesList(extra)}` : ""}`;
+      </table>
+      ${extraList}`;
   }
-
-  // series on the channel whose videos are all already in the table above: just a "play it all in one go" link
-  const whole = (list, label) => list?.length ? `<span class="typ whole">▶ ${label}: ${list.map(a =>
-    `<a href="${ytUrl(a.id)}" target="_blank" rel="noopener">${esc(a.title)}${a.count ? ` (${a.count})` : ""}</a>`).join(" · ")}</span>` : "";
 
   function seriesList(pls) {
     const shown = pls.filter(p => keep([p.id]));
-    if (!shown.length) return `<div class="table-wrap"><div class="empty">Τίποτα εδώ με αυτό το φίλτρο.</div></div>`;
+    if (!shown.length) return `<div class="empty">Τίποτα εδώ με αυτό το φίλτρο.</div>`;
     let html = "", last = null;
     shown.forEach(p => {
       if (p.kind !== last) { html += `<div class="group">${KIND[p.kind] || p.kind}</div>`; last = p.kind; }
       html += itemRow(p);
     });
-    return `<div class="table-wrap list">${html}</div>`;
+    return `<div class="list">${html}</div>`;
   }
 
   function itemRow(p) {
     const cls = status[p.id] === "w" ? "done" : status[p.id] === "r" ? "rev" : "";
-    return `<div class="item ${cls}">${yt(p.id, p.title, p.count, p.url)}${p.new != null && p.new < p.count ? `<span class="kind" title="Τα υπόλοιπα βίντεο της playlist είναι ήδη στον πίνακα">${p.new} νέα</span>` : ""}${
-      p.where ? `<span class="kind">${esc(p.where)}</span>` : ""}${st(p.id)}</div>`;
+    const head = p.track === false ? `<span class="pl plain"><span>${link(p.url, p.title, p.count)}</span></span>` : pl(p.id, p.title, p.count, p.url);
+    return `<div class="item ${p.track === false ? "" : cls}">${head}${p.new != null && p.new < p.count ? `<span class="where" title="Τα υπόλοιπα βίντεο της playlist είναι ήδη στον πίνακα">${p.new} νέα</span>` : ""}${
+      p.where ? `<span class="where">${esc(p.where)}</span>` : ""}</div>`;
   }
 
   // every trackable playlist, with where it lives (for search + review list)
@@ -154,11 +158,11 @@
     if (_all) return _all;
     const map = new Map();
     D.courses.forEach(c => c.sections.forEach(s => s.rows.forEach(r => {
-      const add = (o, title) => usable(o) && !map.has(o.video) &&
-        map.set(o.video, { id: o.video, title, count: o.count, url: urlOf(o), where: `${c.code} · ${s.title}`, text: `${s.title} ${r.lesson} ${title}` });
-      add(r, r.lesson);
-      add(r.test, `${r.lesson} — ${r.test?.name}`);
-      add(r.cards, `${r.lesson} — ${r.cards?.name}`);
+      const add = (o, title, track) => usable(o) && !map.has(o.video) &&
+        map.set(o.video, { id: o.video, title, count: o.count, url: urlOf(o), track, where: `${c.code} · ${s.title}`, text: `${s.title} ${r.lesson} ${title}` });
+      add(r, r.lesson, true);
+      add(r.test, r.lesson ? `${r.lesson} — ${r.test?.name}` : r.test?.name, false);
+      add(r.cards, `${r.lesson} — ${r.cards?.name}`, false);
     })));
     D.series.forEach(s => s.playlists.forEach(p => !map.has(p.id) && map.set(p.id, { ...p, where: s.name, text: `${s.name} ${p.title}` })));
     return (_all = [...map.values()]);
@@ -168,10 +172,10 @@
     const words = norm(q).split(/\s+/).filter(Boolean);
     const hits = allItems().filter(x => { const t = norm(x.text); return words.every(w => t.includes(w)); });
     main.innerHTML = `<h1>Αναζήτηση</h1><p class="sub">${hits.length} αποτελέσματα για «${esc(q)}»</p>
-      <div class="table-wrap list">${hits.slice(0, 300).map(itemRow).join("") || '<div class="empty">Κανένα αποτέλεσμα.</div>'}</div>`;
+      <div class="list">${hits.slice(0, 300).map(itemRow).join("") || '<div class="empty">Κανένα αποτέλεσμα.</div>'}</div>`;
   }
 
-  // ---------------------------------------------------------------- routing
+  // ---------------------------------------------------------------- routing: #slug or #slug/<section id>
   function tabs(active) {
     const a = (url, label, on) => `<a href="${url}" class="${on ? "active" : ""}">${esc(label)}</a>`;
     const nav = $("#tabs");
@@ -183,23 +187,26 @@
   function render(keepScroll) {
     const y = scrollY;
     const q = $("#search").value.trim();
-    const h = location.hash.slice(1);
-    tabs(q ? null : h);
-    const c = COURSES.find(x => x.slug === h);
+    const [slug, sec] = location.hash.slice(1).split("/");
+    tabs(q ? null : slug);
+    const c = COURSES.find(x => x.slug === slug);
     q ? viewSearch(q) : c ? viewCourse(c) : viewHome();
     if (keepScroll) scrollTo(0, y);
+    else if (sec && !q) document.getElementById(sec)?.scrollIntoView();
   }
 
   // ---------------------------------------------------------------- events
   main.addEventListener("click", e => {
-    const b = e.target.closest(".st button");
-    if (b) { setStatus(b.parentElement.dataset.id, b.dataset.s); return render(true); }
-    const j = e.target.closest("[data-jump]");  // in-page jump without touching the #route
-    if (j) { e.preventDefault(); return document.getElementById(j.dataset.jump)?.scrollIntoView({ behavior: "smooth" }); }
+    const b = e.target.closest("[data-s]");
+    if (b) {
+      const { id, s } = b.dataset;
+      setStatus(id, s); render(true);
+      return document.querySelector(`[data-id="${id}"][data-s="${s}"]`)?.focus({ preventScroll: true });  // keep keyboard users in place
+    }
     const f = e.target.closest("#filter button");
     if (f) { filter = f.dataset.f; try { sessionStorage.setItem("ps-filter", filter); } catch (err) {} render(true); }
   });
-  addEventListener("hashchange", () => { $("#search").value = ""; render(); scrollTo(0, 0); });
+  addEventListener("hashchange", () => { $("#search").value = ""; scrollTo(0, 0); render(); });
   let t;
   $("#search").addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => render(), 150); });
   $("#theme").addEventListener("click", () => {
@@ -223,6 +230,8 @@
   $("#reset").addEventListener("click", () => {
     if (confirm("Να σβηστεί όλη η πρόοδος σε αυτόν τον browser;")) { status = {}; save(); render(true); }
   });
+  // sticky section headers sit just under the (wrapping) site header
+  new ResizeObserver(([e]) => document.documentElement.style.setProperty("--hh", e.target.offsetHeight + "px")).observe($(".top"));
   $("#generated").textContent = `Δεδομένα: ${D.generated} · ${D.total} playlists.`;
   render();
 })();
