@@ -395,22 +395,27 @@ SERIES_FOR_LESSONS = {"C Μάθημα": "ΓΛΩΣΣΑ C", "Αλγόριθμοι 
 
 
 def fill_lessons_from_series(site, extras):
-    """Some lesson rows of his ΠΛΗ10 table have no video, but the lesson is inside one of his big C series
-    (e.g. "C Μάθημα 5" = videos 26-37 of ΓΛΩΣΣΑ C): link into the series at that point."""
+    """Some lesson rows of his tables have no video (or had a wrong one), but the lesson is inside one of his big
+    series (e.g. "C Μάθημα 5" = videos 26-37 of ΓΛΩΣΣΑ C, ΠΛΗ20 1.6 = videos 15-27 of ΓΕΝΝΗΤΡΙΕΣ ΣΥΝΑΡΤΗΣΕΙΣ):
+    link into the series at that point."""
     by_title, videos = {p["title"]: p["id"] for p in extras}, {}
     for c in site:
         for s in c["sections"]:
             for r in s["rows"]:
-                m = re.match(r"(C Μάθημα|Αλγόριθμοι C|Δομές C)\s*(\d+)", r["lesson"])
-                if r.get("video") or not m or SERIES_FOR_LESSONS[m.group(1)] not in by_title:
+                m = re.match(r"(C Μάθημα|Αλγόριθμοι C|Δομές C)\s*(\d+)", r["lesson"]) or re.match(r"()(\d+\.\d+):", r["lesson"])
+                if r.get("video") or not m:
                     continue
-                pid = by_title[SERIES_FOR_LESSONS[m.group(1)]]
-                vids = videos.setdefault(pid, playlist_videos(pid))
-                idx = [i for i, (_, t) in enumerate(vids) if re.search(LESSON + r"\s*" + m.group(2) + r"(?![\d.])", t)]
-                if idx:  # synthetic id (playlist@index) so it can still be marked watched
-                    r.update(video=f"{pid}@{idx[0] + 1}", count=len(idx),
-                             alt={"v": vids[idx[0]][0], "list": pid, "index": idx[0] + 1})
-                    log("  filled", r["lesson"], "from", SERIES_FOR_LESSONS[m.group(1)], "videos", idx[0] + 1, "-", idx[-1] + 1)
+                pids = ([by_title[SERIES_FOR_LESSONS[m.group(1)]]] if SERIES_FOR_LESSONS.get(m.group(1)) in by_title
+                        else [] if m.group(1) else  # "1.6: ..." -> any full series of the same course
+                        [p["id"] for p in extras if series_of(p["title"]) == c["code"] and kind_of(p["title"]) == "collection"])
+                for pid in pids:
+                    vids = videos.setdefault(pid, playlist_videos(pid))
+                    idx = [i for i, (_, t) in enumerate(vids) if re.search(LESSON + r"\s*" + re.escape(m.group(2)) + r"(?![\d.])", t)]
+                    if idx:  # synthetic id (playlist@index) so it can still be marked watched
+                        r.update(video=f"{pid}@{idx[0] + 1}", count=len(idx),
+                                 alt={"v": vids[idx[0]][0], "list": pid, "index": idx[0] + 1})
+                        log("  filled", r["lesson"], "from", pid, "videos", idx[0] + 1, "-", idx[-1] + 1)
+                        break
 
 
 PLH31_SECTIONS = {"ΑΝΑΖΗΤΗΣΗ": "Αναζήτηση", "ΓΝΩΣΗ": "Γνώση (Λογική)", "ΝΕΥΡΩΝΙΚΑ ΔΙΚΤΥΑ": "Νευρωνικά Δίκτυα",
@@ -538,6 +543,10 @@ def main():
     for c in site:  # attach titles/counts to site rows
         for s in c["sections"]:
             for r in s["rows"]:
+                n, k = re.match(r"(\d+(?:\.\d+)*):", r["lesson"]), lesson_key(pls.get(r.get("video"), {}).get("title", ""))
+                if n and k and k != tuple(int(x) for x in n.group(1).split(".")):  # psounis.gr typo: ΠΛΗ20 1.6 -> the 1.4 playlist
+                    log("  wrong link on psounis.gr:", c["code"], r["lesson"], "->", pls[r["video"]]["title"])
+                    r["video"] = None
                 for obj in (r, r.get("test") or {}, r.get("cards") or {}):
                     if obj.get("video") in pls:
                         obj["count"] = pls[obj["video"]]["count"]
